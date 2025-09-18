@@ -9,6 +9,7 @@ import tensorflow as tf
 from tensorflow.keras import layers, models
 import pandas as pd
 import seaborn as sns
+import matplotlib.pyplot as plt
 
 # 1. 가상 특징 벡터 데이터 생성
 def generate_feature_data(n_samples=500):

@@ -7,6 +7,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
+from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 
 # 1. 가상 생체 신호 데이터 생성
@@ -26,28 +27,44 @@ def generate_vital_signs(n_samples=500, seq_length=200):
         signal[anomaly_point:anomaly_point+10] += np.random.uniform(2, 4, 10) # 갑작스러운 움직임
         anomaly_signals.append(signal)
 
-    return np.array(normal_signals).reshape(-1, seq_length, 1), np.array(anomaly_signals).reshape(-1, seq_length, 1)
+    return np.array(normal_signals), np.array(anomaly_signals)
 
-X_train, X_anomaly = generate_vital_signs()
+X_train_raw, X_anomaly_raw = generate_vital_signs()
 
-# 2. LSTM Autoencoder 모델 설계
+# 2. 데이터 전처리 (개선 사항: MinMaxScaler 정규화)
+# 모든 데이터를 0과 1 사이로 스케일링하여 학습 안정성 향상
+scaler = MinMaxScaler()
+X_train_flat = X_train_raw.reshape(-1, 1)
+scaler.fit(X_train_flat)
+
+X_train = scaler.transform(X_train_flat).reshape(X_train_raw.shape + (1,))
+X_anomaly = scaler.transform(X_anomaly_raw.reshape(-1, 1)).reshape(X_anomaly_raw.shape + (1,))
+
+
+# 3. LSTM Autoencoder 모델 설계
 model = models.Sequential([
     # Encoder
     layers.Input(shape=(200, 1)),
-    layers.LSTM(32, activation='relu', return_sequences=True),
-    layers.LSTM(16, activation='relu', return_sequences=False),
-    layers.RepeatVector(200), # Decoder 입력 형태로 변환
+    # 개선 사항: LSTM에서 불안정한 relu 활성화 함수 제거 (기본값인 tanh 사용)
+    layers.LSTM(32, return_sequences=True),
+    layers.LSTM(16, return_sequences=False),
+    
+    layers.RepeatVector(200),
+    
     # Decoder
-    layers.LSTM(16, activation='relu', return_sequences=True),
-    layers.LSTM(32, activation='relu', return_sequences=True),
-    layers.TimeDistributed(layers.Dense(1))
+    layers.LSTM(16, return_sequences=True),
+    layers.LSTM(32, return_sequences=True),
+    
+    # 개선 사항: 데이터가 0~1 사이이므로, 출력층에 sigmoid 활성화 함수 추가
+    layers.TimeDistributed(layers.Dense(1, activation='sigmoid'))
 ])
+model.summary()
 
-# 3. 모델 컴파일 및 학습 (정상 데이터만으로 학습!)
+# 4. 모델 컴파일 및 학습 (정상 데이터만으로 학습!)
 model.compile(optimizer='adam', loss='mae')
-model.fit(X_train, X_train, epochs=10, batch_size=32)
+model.fit(X_train, X_train, epochs=100, batch_size=32, validation_split=0.1)
 
-# 4. 이상 탐지 결과 확인
+# 5. 이상 탐지 결과 확인
 reconstructed_normal = model.predict(X_train[:1])
 reconstructed_anomaly = model.predict(X_anomaly[:1])
 
@@ -55,19 +72,27 @@ reconstructed_anomaly = model.predict(X_anomaly[:1])
 mae_normal = np.mean(np.abs(X_train[:1] - reconstructed_normal), axis=1)
 mae_anomaly = np.mean(np.abs(X_anomaly[:1] - reconstructed_anomaly), axis=1)
 
+print("\n## 복원 오차 비교 ##")
 print(f"정상 신호 복원 오차: {mae_normal[0][0]:.4f}")
 print(f"이상 신호 복원 오차: {mae_anomaly[0][0]:.4f}")
 
+# 6. 결과 시각화
 plt.figure(figsize=(12, 5))
+
+# Normal Signal Plot
 plt.subplot(1, 2, 1)
 plt.plot(X_train[0], label='Original Normal')
 plt.plot(reconstructed_normal[0], label='Reconstructed')
 plt.legend()
 plt.title(f'Normal Signal (MAE: {mae_normal[0][0]:.4f})')
+plt.ylim(0, 1)
 
+# Anomaly Signal Plot
 plt.subplot(1, 2, 2)
 plt.plot(X_anomaly[0], label='Original Anomaly')
 plt.plot(reconstructed_anomaly[0], label='Reconstructed')
 plt.legend()
 plt.title(f'Anomaly Signal (MAE: {mae_anomaly[0][0]:.4f})')
+plt.ylim(0, 1)
+
 plt.show()
